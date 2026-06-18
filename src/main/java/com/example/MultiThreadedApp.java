@@ -1,18 +1,21 @@
 package com.example;
 
-import org.apache.log4j.ConsoleAppender;
-import org.apache.log4j.FileAppender;
-import org.apache.log4j.Layout;
-import org.apache.log4j.LogManager;
-import org.apache.log4j.Logger;
-import org.apache.log4j.PatternLayout;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.ConsoleAppender;
+import org.apache.logging.log4j.core.appender.FileAppender;
+import org.apache.logging.log4j.core.config.AppenderRef;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.logging.log4j.core.layout.PatternLayout;
+import org.apache.logging.log4j.Level;
 
-import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
 /**
- * Multithreaded application with SLF4J logging to console and files
+ * Multithreaded application with Log4j 2 logging to console and files
  * Command-line parameter: number of threads (default: 3)
  * Main thread writes to p-<date>.log
  * Worker thread n writes to p-<date>-n.log
@@ -42,15 +45,15 @@ public class MultiThreadedApp {
         // Generate date string for file naming
         dateStr = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date());
 
-        // Configure Log4j dynamically
+        // Configure Log4j 2 dynamically
         configureLogging(numThreads, dateStr);
 
-        mainLogger = Logger.getLogger(MultiThreadedApp.class);
+        mainLogger = LogManager.getLogger(MultiThreadedApp.class);
 
         mainLogger.info("========================================");
-        mainLogger.info("Application started at: " + new Date());
-        mainLogger.info("Date prefix: p-" + dateStr);
-        mainLogger.info("Number of worker threads: " + numThreads);
+        mainLogger.info("Application started at: {}", new Date());
+        mainLogger.info("Date prefix: p-{}", dateStr);
+        mainLogger.info("Number of worker threads: {}", numThreads);
         mainLogger.info("========================================");
 
         // Create and start worker threads
@@ -62,7 +65,7 @@ public class MultiThreadedApp {
 
         // Main thread performs some work
         for (int j = 0; j < 5; j++) {
-            mainLogger.info("[MAIN] Processing task " + (j + 1) + " of 5");
+            mainLogger.info("[MAIN] Processing task {} of 5", j + 1);
             Thread.sleep(1000);
         }
 
@@ -75,53 +78,67 @@ public class MultiThreadedApp {
 
         mainLogger.info("========================================");
         mainLogger.info("[MAIN] All threads completed successfully");
-        mainLogger.info("Application ended at: " + new Date());
+        mainLogger.info("Application ended at: {}", new Date());
         mainLogger.info("========================================");
     }
 
     /**
-     * Configure Log4j appenders dynamically based on thread count
+     * Configure Log4j 2 appenders dynamically based on thread count
      */
     private static void configureLogging(int numThreads, String dateStr) {
-        Logger rootLogger = Logger.getRootLogger();
-        rootLogger.removeAllAppenders();
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        Configuration config = context.getConfiguration();
 
-        // Pattern layout
-        Layout layout = new PatternLayout(LOG_PATTERN);
+        // Create pattern layout
+        PatternLayout layout = PatternLayout.newBuilder()
+                .withConfiguration(config)
+                .withPattern(LOG_PATTERN)
+                .build();
 
-        // Console appender
-        ConsoleAppender console = new ConsoleAppender(layout);
-        console.setName("console");
-        rootLogger.addAppender(console);
+        // Create console appender
+        ConsoleAppender console = ConsoleAppender.createDefaultAppenderForLayout(layout);
+        console.start();
+        config.addAppender(console);
 
-        // Main file appender
-        try {
-            String mainLogFile = LOG_DIR + "/p-" + dateStr + ".log";
-            FileAppender mainFile = new FileAppender(layout, mainLogFile, false);
-            mainFile.setName("mainFile");
-            rootLogger.addAppender(mainFile);
-        } catch (IOException e) {
-            System.err.println("Error creating main log file: " + e.getMessage());
-        }
+        // Create main file appender
+        String mainLogFile = LOG_DIR + "/p-" + dateStr + ".log";
+        FileAppender mainFile = FileAppender.newBuilder()
+                .setConfiguration(config)
+                .setName("mainFile")
+                .setLayout(layout)
+                .withFileName(mainLogFile)
+                .withAppend(false)
+                .build();
+        mainFile.start();
+        config.addAppender(mainFile);
 
-        rootLogger.setLevel(org.apache.log4j.Level.INFO);
+        // Update root logger
+        LoggerConfig rootConfig = config.getRootLogger();
+        rootConfig.setLevel(Level.INFO);
+        rootConfig.addAppender(console, Level.INFO, null);
+        rootConfig.addAppender(mainFile, Level.INFO, null);
 
         // Create thread-specific loggers and appenders
         for (int i = 1; i <= numThreads; i++) {
             String loggerName = "Thread-" + i;
-            Logger threadLogger = Logger.getLogger(loggerName);
-            threadLogger.setLevel(org.apache.log4j.Level.INFO);
-            threadLogger.setAdditivity(false); // Don't propagate to root logger
+            String threadLogFile = LOG_DIR + "/p-" + dateStr + "-" + i + ".log";
 
-            try {
-                String threadLogFile = LOG_DIR + "/p-" + dateStr + "-" + i + ".log";
-                FileAppender threadFile = new FileAppender(layout, threadLogFile, false);
-                threadFile.setName("thread" + i + "File");
-                threadLogger.addAppender(threadFile);
-            } catch (IOException e) {
-                System.err.println("Error creating thread " + i + " log file: " + e.getMessage());
-            }
+            FileAppender threadFile = FileAppender.newBuilder()
+                    .setConfiguration(config)
+                    .setName("thread" + i + "File")
+                    .setLayout(layout)
+                    .withFileName(threadLogFile)
+                    .withAppend(false)
+                    .build();
+            threadFile.start();
+            config.addAppender(threadFile);
+
+            LoggerConfig threadLoggerConfig = new LoggerConfig(loggerName, Level.INFO, false);
+            threadLoggerConfig.addAppender(threadFile, Level.INFO, null);
+            config.addLogger(loggerName, threadLoggerConfig);
         }
+
+        context.updateLoggers();
     }
 
     /**
@@ -137,33 +154,33 @@ public class MultiThreadedApp {
             this.dateStr = dateStr;
             this.setName("WorkerThread-" + threadNumber);
             // Each thread gets its own logger named Thread-N
-            this.threadLogger = Logger.getLogger("Thread-" + threadNumber);
+            this.threadLogger = LogManager.getLogger("Thread-" + threadNumber);
         }
 
         @Override
         public void run() {
-            threadLogger.info("[THREAD-" + threadNumber + "] Worker thread started");
-            threadLogger.info("[THREAD-" + threadNumber + "] Thread name: " + Thread.currentThread().getName());
+            threadLogger.info("[THREAD-{}] Worker thread started", threadNumber);
+            threadLogger.info("[THREAD-{}] Thread name: {}", threadNumber, Thread.currentThread().getName());
 
             try {
                 // Simulate work with multiple iterations
                 for (int i = 1; i <= 5; i++) {
-                    threadLogger.info("[THREAD-" + threadNumber + "] Performing task " + i + " of 5");
+                    threadLogger.info("[THREAD-{}] Performing task {} of 5", threadNumber, i);
 
                     // Simulate processing
                     long startTime = System.currentTimeMillis();
                     Thread.sleep(500 + (threadNumber * 100)); // Variable sleep time
                     long duration = System.currentTimeMillis() - startTime;
 
-                    threadLogger.info("[THREAD-" + threadNumber + "] Task " + i + " completed in " + duration + " ms");
+                    threadLogger.info("[THREAD-{}] Task {} completed in {} ms", threadNumber, i, duration);
                 }
 
-                threadLogger.info("[THREAD-" + threadNumber + "] Worker thread completed successfully");
+                threadLogger.info("[THREAD-{}] Worker thread completed successfully", threadNumber);
             } catch (InterruptedException e) {
-                threadLogger.error("[THREAD-" + threadNumber + "] Thread interrupted", e);
+                threadLogger.error("[THREAD-{}] Thread interrupted", threadNumber, e);
                 Thread.currentThread().interrupt();
             } catch (Exception e) {
-                threadLogger.error("[THREAD-" + threadNumber + "] An error occurred", e);
+                threadLogger.error("[THREAD-{}] An error occurred", threadNumber, e);
             }
         }
     }
